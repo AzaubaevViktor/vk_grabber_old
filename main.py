@@ -1,138 +1,137 @@
-import datetime
+import logging
+from threading import Thread
+from time import sleep
+
 import vk
-from sqlalchemy import create_engine, ForeignKey, Table
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from sqlalchemy import Column, Integer, String, Date
+from vk.exceptions import VkAPIError
 
-api = vk.API(vk.Session())
+from bd import *
 
-engine = create_engine('sqlite:///:memory:')
-Session = sessionmaker()
-Session.configure(bind=engine)
-session = Session()
+FORMAT = '%(levelname)-7s: %(lineno)d: %(name)-10s %(asctime)-15s %(message)s'
+logging.basicConfig(datefmt='%d.%m.%Y %I:%M:%S.%p',
+                    format=FORMAT,
+                    level=logging.INFO)
 
-Base = declarative_base()
-
-occupations = {
-    '': -1,
-    'work': 0,
-    'school': 1,
-    'university': 2
-}
+is_run = True
 
 
-user_post_link = Table("user_post_link", Base.metadata,
-                       Column("user", ForeignKey("users.id"), primary_key=True),
-                       Column("post", ForeignKey("posts.id"), primary_key=True))
+class SessionDBThread(Thread):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logger = logging.getLogger("SessionDBThread")
+        self.session = get_session()
+
+    def run(self):
+        while is_run:
+            sleep(1)
+
+    def get_setting(self, key):
+        pass
+
+    def set_setting(self, key, value):
+        pass
 
 
-class Post(Base):
-    __tablename__ = "posts"
-    id = Column(Integer, primary_key=True)
-    text = Column(String)
-    date = Column(Integer)
-    user_id = Column(Integer, ForeignKey('users.id'))
+class VKUserGetThread(Thread):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logger = logging.getLogger("VKUserGetThread")
 
-    def __init__(self, post):
-        self.text = str(post.get('text', ''))
-        self.date = int(post.get('date', -1))
+        self.api = vk.API(vk.Session())
+        self.session = get_session()
+        self.last_added_user = self.session.query(Setting).filter_by(key="last_added_user").first()
+        self.chunk = 1000
+        if self.last_added_user is None:
+            self.last_added_user = Setting("last_added_user", 0)
+            self.session.add(self.last_added_user)
+            self.session.commit()
 
+    def run(self):
+        while is_run:
+            cur_uid = self.last_added_user.int_value
+            users = None
+            while users is None:
+                try:
+                    users = self.api.users.get(
+                        user_ids=list(range(cur_uid, cur_uid + self.chunk)),
+                        fields='sex, bdate, city, country, education, counters, occupation, relation, personal'
+                    )
+                except VkAPIError as e:
+                    self.logger.warn("Exception {} as vk.api.users.get", e)
+                    if e.code == 6 or e.code == 14:
+                        sleep(1)
+                    else:
+                        break
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    first_name = Column(String)
-    last_name = Column(String)
+            if users is None:
+                continue
 
-    sex = Column(Integer)
-    bdate = Column(String)
+            users_bd = [User(user) for user in users if user.get('deactivated', None) is None]
+            self.session.add_all(users_bd)
+            self.last_added_user.int_value = cur_uid + self.chunk
+            self.session.commit()
 
-    city = Column(Integer)
-    country = Column(Integer)
-
-    university = Column(Integer)
-    faculty = Column(Integer)
-
-    followers = Column(Integer)
-    photos = Column(Integer)
-    videos = Column(Integer)
-    albums = Column(Integer)
-    audios = Column(Integer)
-    posts_count = Column(Integer)
-
-    occupation = Column(Integer)
-    relation = Column(Integer)
-
-    life_main = Column(Integer)
-    alcohol = Column(Integer)
-    political = Column(Integer)
-    smoking = Column(Integer)
-    religion = Column(String)
-    people_main = Column(Integer)
-
-    posts = relationship(Post, backref="users")
-
-    def __init__(self, user):
-        self.id = user.get('uid', -1)
-        self.first_name = user.get('first_name', "")
-        self.last_name = user.get('last_name', "")
-        self.religion = dict(user.get('personal', dict())).get('religion', "")
-
-        self.bdate = user.get('bdate', '')
-
-        self.sex = user.get('sex', -1)
-        self.city = user.get('city', -1)
-        self.country = user.get('country', -1)
-        self.university = user.get('university', -1)
-        self.faculty = user.get('faculty', -1)
-
-        self.followers = dict(user.get('counters', dict())).get('followers', -1)
-        self.photos = dict(user.get('counters', dict())).get('photos', -1)
-        self.videos = dict(user.get('counters', dict())).get('videos', -1)
-        self.albums = dict(user.get('counters', dict())).get('albums', -1)
-        self.audios = dict(user.get('counters', dict())).get('audios', -1)
-
-        self.occupation = occupations[user.get('occupation', dict()).get('type', "")]
-        self.relation = dict(user.get('personal', dict())).get('relation', -1)
-        self.life_main = dict(user.get('personal', dict())).get('life_main', -1)
-        self.alcohol = dict(user.get('personal', dict())).get('alcohol', -1)
-        self.political = dict(user.get('personal', dict())).get('political', -1)
-        self.smoking = dict(user.get('personal', dict())).get('smoking', -1)
-        self.people_main = dict(user.get('personal', dict())).get('people_main', -1)
+            self.logger.info("Added {} users, current uid: {}".format(
+                             len(users_bd), cur_uid))
 
 
+class VKPostsGetThread(Thread):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logger = logging.getLogger("VKPostsGetThread")
+        self.api = vk.API(vk.Session())
+        self.session = get_session()
 
-Base.metadata.create_all(engine)
+    def run(self):
+        while is_run:
+            users = self.session.query(User).filter_by(post_loaded=False).limit(100)
+            for user in users:
+                if not is_run:
+                    break
 
-users = api.users.get(
-    user_ids=list(range(1300, 1400)),
-    fields='sex, bdate, city, country, education, counters, occupation, relation, personal'
-)
+                user.post_loaded = True
 
-users_bd = [User(user) for user in users if user.get('deactivated', None) is None]
-print(len(users_bd))
-session.add_all(users_bd)
-session.commit()
+                posts = None
+                while posts is None:
+                    try:
+                        self.logger.info("Get posts for id{}".format(user.id))
+                        posts = self.api.wall.get(
+                            owner_id=user.id,
+                            count=100,
+                            filter='owned',
+                            version=5.40
+                        )
+                    except VkAPIError as e:
+                        self.logger.warn("Exception {} as vk.api.wall.get".format(e))
+                        if e.code == 6 or e.code == 14:
+                            sleep(1)
+                        else:
+                            break
 
-user1340 = session.query(User).filter_by(id=1340).all()[0]
+                if posts is None:
+                    continue
 
-posts = api.wall.get(
-    owner_id=1340,
-    count=1,
-    filter='owned',
-    version=5.40
-)
+                posts_bd = [Post(post) for post in posts[1:] if not post.get('text', '') is '']
+                user.posts_count = posts[0]
+                user.posts = posts_bd
+                self.session.add_all(posts_bd)
+                self.session.commit()
+
+                self.logger.info("Id{}, found {} posts".format(user.id, len(posts_bd)))
 
 
-posts_bd = [Post(post) for post in posts[1:]]
-print(posts[0])
-user1340.posts_count = posts[0]
-user1340.posts = posts_bd
-session.add_all(posts_bd)
-session.commit()
+users_get = VKUserGetThread()
+posts_get = VKPostsGetThread()
 
-print("-----------------")
+users_get.start()
+posts_get.start()
 
-for user in session.query(User).filter_by(alcohol=-1).all():
-    print(user.last_name, user.first_name, user.posts)
+try:
+    while 1:
+        sleep(1)
+except KeyboardInterrupt:
+    is_run = False
+    print("KeyInterrupt pressed")
+
+users_get.join()
+posts_get.join()
