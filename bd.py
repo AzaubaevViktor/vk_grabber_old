@@ -134,6 +134,7 @@ class Post(Base):
     __tablename__ = "posts"
     id = Column(Integer, primary_key=True)
     text = Column(String)
+    lemmas = Column(String)
     date = Column(Integer)
     user_id = Column(Integer, ForeignKey('users.id'))
 
