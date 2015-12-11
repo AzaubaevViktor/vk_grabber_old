@@ -96,7 +96,7 @@ class User(Base):
     religion = Column(String)
     people_main = Column(Integer)
 
-    posts = relationship("Post", backref="users")
+    # posts = relationship("Post", backref="users")
     post_loaded = Column(Boolean)
 
     def __init__(self, user):
@@ -130,16 +130,54 @@ class User(Base):
         self.post_loaded = False
 
 
+class UserWithPost(Base):
+    __tablename__ = "userswithposts"
+    id = Column(Integer, primary_key=True)
+    first_name = Column(String)
+    last_name = Column(String)
+
+    sex = Column(Integer)
+    bdate = Column(String)
+
+    city = Column(Integer)
+    country = Column(Integer)
+
+    university = Column(Integer)
+    faculty = Column(Integer)
+
+    followers = Column(Integer)
+    photos = Column(Integer)
+    videos = Column(Integer)
+    albums = Column(Integer)
+    audios = Column(Integer)
+    posts_count = Column(Integer)
+
+    occupation = Column(Integer)
+    relation = Column(Integer)
+
+    life_main = Column(Integer)
+    alcohol = Column(Integer)
+    political = Column(Integer)
+    smoking = Column(Integer)
+    religion = Column(String)
+    people_main = Column(Integer)
+
+    posts = relationship("Post", backref="users")
+    post_loaded = Column(Boolean)
+
+
 class Post(Base):
     __tablename__ = "posts"
     id = Column(Integer, primary_key=True)
     text = Column(String)
     lemmas = Column(String)
     date = Column(Integer)
-    user_id = Column(Integer, ForeignKey('users.id'))
+    # user_id = Column(Integer, ForeignKey('users.id'))
+    user_id = Column(Integer, ForeignKey('userswithposts.id'))
 
     def __init__(self, post):
         self.text = str(post.get('text', ''))
         self.date = int(post.get('date', -1))
 
 Base.metadata.create_all(bind=engine)
+
